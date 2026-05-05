@@ -20,53 +20,11 @@ class Canvas(QWidget):
         self.dragging = False
         self.last_mouse_pos = None
         self.start_pos = None
-        self.curr_mouse_pos = None
+        self.curr_mouse_pos = None # Tambahan untuk Live Preview
         self.mirror_start = None
         self.mirror_curr = None
 
-        # --- SISTEM UNDO & REDO ---
-        self.undo_stack = []
-        self.redo_stack = []
-        self.save_state() # Simpan state kanvas kosong pertama kali
-
-    # --- 1. STATE MANAGEMENT (UNDO / REDO) ---
-    def _copy_shapes(self, source_shapes):
-        """Membuat duplikat memori (Deep Copy) agar state sebelumnya tidak ikut berubah"""
-        cloned = []
-        for s in source_shapes:
-            new_s = {
-                'color': QColor(s['color'].rgba()),
-                'fill_color': QColor(s['fill_color'].rgba()) if s.get('fill_color') else None,
-                'type': s['type']
-            }
-            if 'pts' in s: new_s['pts'] = list(s['pts'])
-            if 'params' in s: new_s['params'] = dict(s['params'])
-            cloned.append(new_s)
-        return cloned
-
-    def save_state(self):
-        """Merekam kondisi kanvas saat ini ke dalam tumpukan Undo"""
-        self.undo_stack.append(self._copy_shapes(self.shapes))
-        if len(self.undo_stack) > 30: # Batasi memori hingga 30 langkah
-            self.undo_stack.pop(0)
-        self.redo_stack.clear()
-
-    def undo(self):
-        if len(self.undo_stack) > 1:
-            self.redo_stack.append(self.undo_stack.pop())
-            self.shapes = self._copy_shapes(self.undo_stack[-1])
-            self.selected_index = -1
-            self.redraw_canvas()
-
-    def redo(self):
-        if self.redo_stack:
-            state = self.redo_stack.pop()
-            self.undo_stack.append(state)
-            self.shapes = self._copy_shapes(state)
-            self.selected_index = -1
-            self.redraw_canvas()
-
-    # --- 2. RASTER ALGORITHMS (MANUAL PIXEL MANIPULATION) ---
+    # --- 1. RASTER ALGORITHMS (MANUAL PIXEL MANIPULATION) ---
     def draw_pixel(self, x, y, color):
         if 0 <= x < 900 and 0 <= y < 600:
             self.image.setPixelColor(int(x), int(y), color)
@@ -84,14 +42,18 @@ class Canvas(QWidget):
             if e2 > -dy: err -= dy; x1 += sx
             if e2 < dx: err += dx; y1 += sy
 
+    # Algoritma Lingkaran Midpoint (Simetri 8 Arah)
     def midpoint_circle(self, xc, yc, r, color):
         x, y = 0, r
         d = 1 - r
         self.draw_circle_pts(xc, yc, x, y, color)
         while x < y:
             x += 1
-            if d < 0: d += 2 * x + 1
-            else: y -= 1; d += 2 * (x - y) + 1
+            if d < 0:
+                d += 2 * x + 1
+            else:
+                y -= 1
+                d += 2 * (x - y) + 1
             self.draw_circle_pts(xc, yc, x, y, color)
 
     def draw_circle_pts(self, xc, yc, x, y, color):
@@ -99,28 +61,41 @@ class Canvas(QWidget):
                (xc+y, yc+x), (xc-y, yc+x), (xc+y, yc-x), (xc-y, yc-x)]
         for p in pts: self.draw_pixel(p[0], p[1], color)
 
+    # Algoritma Elips Midpoint (Simetri 4 Arah)
     def midpoint_ellipse(self, xc, yc, rx, ry, color):
         x, y = 0, ry
         rx2, ry2 = rx*rx, ry*ry
+        
+        # Region 1
         d1 = ry2 - (rx2 * ry) + (0.25 * rx2)
         dx, dy = 2 * ry2 * x, 2 * rx2 * y
         while dx < dy:
             self.draw_ellipse_pts(xc, yc, x, y, color)
             x += 1
             dx += 2 * ry2
-            if d1 < 0: d1 += dx + ry2
-            else: y -= 1; dy -= 2 * rx2; d1 += dx - dy + ry2
+            if d1 < 0:
+                d1 += dx + ry2
+            else:
+                y -= 1
+                dy -= 2 * rx2
+                d1 += dx - dy + ry2
                 
+        # Region 2
         d2 = (ry2 * ((x + 0.5)**2)) + (rx2 * ((y - 1)**2)) - (rx2 * ry2)
         while y >= 0:
             self.draw_ellipse_pts(xc, yc, x, y, color)
             y -= 1
             dy -= 2 * rx2
-            if d2 > 0: d2 += rx2 - dy
-            else: x += 1; dx += 2 * ry2; d2 += rx2 - dy + dx
+            if d2 > 0:
+                d2 += rx2 - dy
+            else:
+                x += 1
+                dx += 2 * ry2
+                d2 += rx2 - dy + dx
 
     def draw_ellipse_pts(self, xc, yc, x, y, color):
-        for p in [(xc+x, yc+y), (xc-x, yc+y), (xc+x, yc-y), (xc-x, yc-y)]: self.draw_pixel(p[0], p[1], color)
+        pts = [(xc+x, yc+y), (xc-x, yc+y), (xc+x, yc-y), (xc-x, yc-y)]
+        for p in pts: self.draw_pixel(p[0], p[1], color)
 
     def flood_fill(self, x, y, target_color, fill_color):
         target_rgb, fill_rgb = target_color.rgb(), fill_color.rgb()
@@ -133,9 +108,10 @@ class Canvas(QWidget):
                 self.image.setPixelColor(cx, cy, fill_color)
                 stack.extend([(cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)])
 
-    # --- 3. OBJECT MANAGEMENT ---
+    # --- 2. OBJECT MANAGEMENT ---
     def get_object_at(self, x, y):
-        best_index, best_area = -1, float('inf')
+        best_index = -1
+        best_area = float('inf')
         for i, obj in enumerate(self.shapes):
             t = obj['type']
             pts = obj.get('pts', [])
@@ -153,11 +129,12 @@ class Canvas(QWidget):
                 if area < best_area: best_area, best_index = area, i
         return best_index
 
-    # --- 4. LIVE MATRIX TRANSFORMATIONS ---
+    # --- 3. LIVE MATRIX TRANSFORMATIONS ---
     def apply_matrix_live(self, matrix):
         if self.selected_index == -1: return
         obj = self.shapes[self.selected_index]
         
+        # Handle standar poligon (LINE, RECT, SQUARE, TRIANGLE)
         if 'pts' in obj:
             pts = obj['pts']
             cx, cy = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
@@ -169,9 +146,11 @@ class Canvas(QWidget):
                 new_pts.append((nx + cx, ny + cy))
             obj['pts'] = new_pts
             
+        # Handle Lingkaran & Elips (Transform xc, yc, r, rx, ry)
         elif 'params' in obj:
             p = obj['params']
             cx, cy = p['xc'], p['yc']
+            
             tx, ty = cx - cx, cy - cy
             nx = tx * matrix[0][0] + ty * matrix[0][1] + matrix[0][2]
             ny = tx * matrix[1][0] + ty * matrix[1][1] + matrix[1][2]
@@ -184,13 +163,13 @@ class Canvas(QWidget):
 
     def apply_arbitrary_reflection(self, p1, p2):
         if self.selected_index == -1: return
-        # Logika mirror khusus bisa diimplementasikan secara spesifik nanti
         pass
 
-    # --- 5. REDRAW ENGINE ---
+    # --- 4. REDRAW ENGINE ---
     def redraw_canvas(self):
         self.image.fill(Qt.GlobalColor.white)
         
+        # Draw saved shapes
         for i, obj in enumerate(self.shapes):
             color = QColor(255, 165, 0) if i == self.selected_index else obj['color']
             t = obj['type']
@@ -219,20 +198,26 @@ class Canvas(QWidget):
         if not self.mode.startswith("T_") and self.start_pos and self.curr_mouse_pos:
             x1, y1 = self.start_pos.x(), self.start_pos.y()
             x2, y2 = self.curr_mouse_pos.x(), self.curr_mouse_pos.y()
-            prev_col = self.color 
+            prev_col = self.color # Warna objek saat digambar
             
             if self.mode == "LINE":
                 self.bresenham_line((x1,y1), (x2,y2), prev_col)
             elif self.mode == "RECT":
-                self.bresenham_line((x1,y1), (x2,y1), prev_col); self.bresenham_line((x2,y1), (x2,y2), prev_col)
-                self.bresenham_line((x2,y2), (x1,y2), prev_col); self.bresenham_line((x1,y2), (x1,y1), prev_col)
+                self.bresenham_line((x1,y1), (x2,y1), prev_col)
+                self.bresenham_line((x2,y1), (x2,y2), prev_col)
+                self.bresenham_line((x2,y2), (x1,y2), prev_col)
+                self.bresenham_line((x1,y2), (x1,y1), prev_col)
             elif self.mode == "SQUARE":
                 s = max(abs(x2-x1), abs(y2-y1))
-                nx2 = x1 + s if x2 > x1 else x1 - s; ny2 = y1 + s if y2 > y1 else y1 - s
-                self.bresenham_line((x1,y1), (nx2,y1), prev_col); self.bresenham_line((nx2,y1), (nx2,ny2), prev_col)
-                self.bresenham_line((nx2,ny2), (x1,ny2), prev_col); self.bresenham_line((x1,ny2), (x1,y1), prev_col)
+                nx2 = x1 + s if x2 > x1 else x1 - s
+                ny2 = y1 + s if y2 > y1 else y1 - s
+                self.bresenham_line((x1,y1), (nx2,y1), prev_col)
+                self.bresenham_line((nx2,y1), (nx2,ny2), prev_col)
+                self.bresenham_line((nx2,ny2), (x1,ny2), prev_col)
+                self.bresenham_line((x1,ny2), (x1,y1), prev_col)
             elif self.mode == "TRIANGLE":
-                self.bresenham_line((x1,y1), (x1,y2), prev_col); self.bresenham_line((x1,y2), (x2,y2), prev_col)
+                self.bresenham_line((x1,y1), (x1,y2), prev_col)
+                self.bresenham_line((x1,y2), (x2,y2), prev_col)
                 self.bresenham_line((x2,y2), (x1,y1), prev_col)
             elif self.mode == "CIRCLE":
                 r = math.hypot(x2-x1, y2-y1)
@@ -242,12 +227,12 @@ class Canvas(QWidget):
                 rx, ry = abs(x2-x1)/2, abs(y2-y1)/2
                 self.midpoint_ellipse(int(xc), int(yc), int(rx), int(ry), prev_col)
 
+        # Garis bantu cermin Cyan
         if self.mode == "T_MIRROR" and self.mirror_start and self.mirror_curr:
             self.bresenham_line((self.mirror_start.x(), self.mirror_start.y()), (self.mirror_curr.x(), self.mirror_curr.y()), Qt.GlobalColor.cyan)
-        
         self.update()
 
-    # --- 6. MOUSE EVENTS ---
+    # --- 5. MOUSE EVENTS ---
     def mousePressEvent(self, event):
         mouse_pos = event.pos()
         self.last_mouse_pos = mouse_pos
@@ -258,7 +243,7 @@ class Canvas(QWidget):
             self.dragging = True
         elif not self.mode.startswith("T_"): 
             self.start_pos = mouse_pos
-            self.curr_mouse_pos = mouse_pos 
+            self.curr_mouse_pos = mouse_pos # Simpan titik awal preview
         self.redraw_canvas()
 
     def mouseMoveEvent(self, event):
@@ -268,6 +253,7 @@ class Canvas(QWidget):
             self.redraw_canvas()
             return
             
+        # Logika Transformasi
         if self.dragging and self.selected_index != -1 and self.last_mouse_pos:
             dx, dy = curr_pos.x() - self.last_mouse_pos.x(), curr_pos.y() - self.last_mouse_pos.y()
             obj = self.shapes[self.selected_index]
@@ -290,17 +276,15 @@ class Canvas(QWidget):
             self.last_mouse_pos = curr_pos
             self.redraw_canvas()
             
+        # Logika Live Preview saat menggambar
         elif not self.mode.startswith("T_") and hasattr(self, 'start_pos') and self.start_pos:
             self.curr_mouse_pos = curr_pos
             self.redraw_canvas()
 
     def mouseReleaseEvent(self, event):
-        action_taken = False
-        
         if self.mode == "T_MIRROR" and self.mirror_start:
             self.apply_arbitrary_reflection(self.mirror_start, event.pos())
             self.mirror_start = self.mirror_curr = None
-            action_taken = True
         elif not self.mode.startswith("T_") and hasattr(self, 'start_pos') and self.start_pos:
             x1, y1, x2, y2 = self.start_pos.x(), self.start_pos.y(), event.pos().x(), event.pos().y()
             new_shape = {'color': self.color, 'fill_color': None, 'type': self.mode}
@@ -322,30 +306,23 @@ class Canvas(QWidget):
             if 'pts' in new_shape or 'params' in new_shape:
                 self.shapes.append(new_shape)
                 self.selected_index = len(self.shapes) - 1
-                action_taken = True
-        elif self.dragging:
-            action_taken = True # Transformasi selesai
                 
         self.dragging = False
         self.start_pos = None
-        self.curr_mouse_pos = None
+        self.curr_mouse_pos = None # Reset preview
         self.redraw_canvas()
-        
-        # Panggil save_state jika ada aksi menggambar / merubah yang selesai
-        if action_taken:
-            self.save_state()
 
     def paintEvent(self, event): QPainter(self).drawImage(0, 0, self.image)
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KelDraw - Raster Graphics Editor")
+        self.setWindowTitle("Pro Graphics Studio v3.0 - Live Preview & Transforms")
         self.canvas = Canvas()
         self.init_ui()
 
     def init_ui(self):
-        # 1. TOOLBAR ATAS 
+        # 1. TOOLBAR ATAS (English UI)
         toolbar = QToolBar("Main Tools")
         self.addToolBar(toolbar)
 
@@ -369,12 +346,11 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda ch, mode=m: self.set_mode(mode))
             toolbar.addAction(a)
 
-        # 2. SIDEBAR KIRI
+        # 2. SIDEBAR KIRI (Warna)
         central_widget = QWidget()
         main_layout = QHBoxLayout(central_widget)
         sidebar = QVBoxLayout()
         
-        # --- Group Warna ---
         color_group = QGroupBox("Select Color")
         c_layout = QVBoxLayout()
         colors = [("Black", Qt.GlobalColor.black), ("White", Qt.GlobalColor.white), 
@@ -389,7 +365,6 @@ class MainWindow(QMainWindow):
             c_layout.addWidget(btn)
         color_group.setLayout(c_layout)
 
-        # --- Group Aksi Warna ---
         action_group = QGroupBox("Apply to Object")
         a_layout = QVBoxLayout()
         btn_outline = QPushButton("Apply Outline")
@@ -400,26 +375,9 @@ class MainWindow(QMainWindow):
         a_layout.addWidget(btn_fill)
         action_group.setLayout(a_layout)
 
-        # --- Group History (Undo/Redo) ---
-        history_group = QGroupBox("History")
-        h_layout = QHBoxLayout()
-        btn_undo = QPushButton("Undo")
-        btn_undo.setStyleSheet("background-color: #555; color: white;")
-        btn_undo.clicked.connect(self.canvas.undo)
-        
-        btn_redo = QPushButton("Redo")
-        btn_redo.setStyleSheet("background-color: #555; color: white;")
-        btn_redo.clicked.connect(self.canvas.redo)
-        
-        h_layout.addWidget(btn_undo)
-        h_layout.addWidget(btn_redo)
-        history_group.setLayout(h_layout)
-
-        # Penempatan Sidebar
         sidebar.addWidget(color_group)
         sidebar.addWidget(action_group)
         sidebar.addStretch()
-        sidebar.addWidget(history_group) # Ditaruh paling bawah
 
         main_layout.addLayout(sidebar)
         main_layout.addWidget(self.canvas)
@@ -439,13 +397,11 @@ class MainWindow(QMainWindow):
         if self.canvas.selected_index != -1:
             self.canvas.shapes[self.canvas.selected_index]['color'] = self.canvas.color
             self.canvas.redraw_canvas()
-            self.canvas.save_state() # Simpan ke Undo saat warna diubah
 
     def apply_fill(self):
         if self.canvas.selected_index != -1:
             self.canvas.shapes[self.canvas.selected_index]['fill_color'] = self.canvas.color
             self.canvas.redraw_canvas()
-            self.canvas.save_state() # Simpan ke Undo saat warna di-fill
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
