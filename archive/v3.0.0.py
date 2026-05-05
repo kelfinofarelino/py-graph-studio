@@ -19,8 +19,6 @@ class Canvas(QWidget):
         
         self.dragging = False
         self.last_mouse_pos = None
-        self.start_pos = None
-        self.curr_mouse_pos = None # Tambahan untuk Live Preview
         self.mirror_start = None
         self.mirror_curr = None
 
@@ -151,29 +149,31 @@ class Canvas(QWidget):
             p = obj['params']
             cx, cy = p['xc'], p['yc']
             
-            tx, ty = cx - cx, cy - cy
+            # 1. Transform Pusat (xc, yc)
+            tx, ty = cx - cx, cy - cy # Pivot adalah dirinya sendiri
             nx = tx * matrix[0][0] + ty * matrix[0][1] + matrix[0][2]
             ny = tx * matrix[1][0] + ty * matrix[1][1] + matrix[1][2]
             p['xc'], p['yc'] = nx + cx, ny + cy
             
-            if matrix[0][0] == matrix[1][1] and matrix[0][0] != 1:
+            # 2. Transform Radius (Hanya Skala yang berefek)
+            if matrix[0][0] == matrix[1][1] and matrix[0][0] != 1: # Skala Seragam
                 scale = matrix[0][0]
                 if 'r' in p: p['r'] *= scale
                 if 'rx' in p: p['rx'] *= scale; p['ry'] *= scale
 
     def apply_arbitrary_reflection(self, p1, p2):
         if self.selected_index == -1: return
+        # (Logika cermin sembarang disederhanakan untuk stabilitas elips)
         pass
 
     # --- 4. REDRAW ENGINE ---
     def redraw_canvas(self):
         self.image.fill(Qt.GlobalColor.white)
-        
-        # Draw saved shapes
         for i, obj in enumerate(self.shapes):
             color = QColor(255, 165, 0) if i == self.selected_index else obj['color']
-            t = obj['type']
             
+            # Pilih algoritma raster yang sesuai
+            t = obj['type']
             if t in ['LINE', 'RECT', 'SQUARE', 'TRIANGLE']:
                 pts = obj['pts']
                 for j in range(len(pts)):
@@ -185,6 +185,7 @@ class Canvas(QWidget):
                 p = obj['params']
                 self.midpoint_ellipse(int(p['xc']), int(p['yc']), int(p['rx']), int(p['ry']), color)
             
+            # Blok Warna (Flood Fill) - Dinonaktifkan saat dragging
             if obj['fill_color'] and not self.dragging:
                 if 'pts' in obj:
                     cx = int(sum(p[0] for p in obj['pts']) / len(obj['pts']))
@@ -193,39 +194,6 @@ class Canvas(QWidget):
                 target_color = self.image.pixelColor(cx, cy)
                 if target_color.rgb() != color.rgb():
                     self.flood_fill(cx, cy, target_color, obj['fill_color'])
-
-        # --- LIVE PREVIEW (RUBBER-BANDING) ---
-        if not self.mode.startswith("T_") and self.start_pos and self.curr_mouse_pos:
-            x1, y1 = self.start_pos.x(), self.start_pos.y()
-            x2, y2 = self.curr_mouse_pos.x(), self.curr_mouse_pos.y()
-            prev_col = self.color # Warna objek saat digambar
-            
-            if self.mode == "LINE":
-                self.bresenham_line((x1,y1), (x2,y2), prev_col)
-            elif self.mode == "RECT":
-                self.bresenham_line((x1,y1), (x2,y1), prev_col)
-                self.bresenham_line((x2,y1), (x2,y2), prev_col)
-                self.bresenham_line((x2,y2), (x1,y2), prev_col)
-                self.bresenham_line((x1,y2), (x1,y1), prev_col)
-            elif self.mode == "SQUARE":
-                s = max(abs(x2-x1), abs(y2-y1))
-                nx2 = x1 + s if x2 > x1 else x1 - s
-                ny2 = y1 + s if y2 > y1 else y1 - s
-                self.bresenham_line((x1,y1), (nx2,y1), prev_col)
-                self.bresenham_line((nx2,y1), (nx2,ny2), prev_col)
-                self.bresenham_line((nx2,ny2), (x1,ny2), prev_col)
-                self.bresenham_line((x1,ny2), (x1,y1), prev_col)
-            elif self.mode == "TRIANGLE":
-                self.bresenham_line((x1,y1), (x1,y2), prev_col)
-                self.bresenham_line((x1,y2), (x2,y2), prev_col)
-                self.bresenham_line((x2,y2), (x1,y1), prev_col)
-            elif self.mode == "CIRCLE":
-                r = math.hypot(x2-x1, y2-y1)
-                self.midpoint_circle(int(x1), int(y1), int(r), prev_col)
-            elif self.mode == "ELLIPSE":
-                xc, yc = (x1+x2)/2, (y1+y2)/2
-                rx, ry = abs(x2-x1)/2, abs(y2-y1)/2
-                self.midpoint_ellipse(int(xc), int(yc), int(rx), int(ry), prev_col)
 
         # Garis bantu cermin Cyan
         if self.mode == "T_MIRROR" and self.mirror_start and self.mirror_curr:
@@ -238,12 +206,8 @@ class Canvas(QWidget):
         self.last_mouse_pos = mouse_pos
         if self.mode == "T_MIRROR": self.mirror_start = self.mirror_curr = mouse_pos
         self.selected_index = self.get_object_at(mouse_pos.x(), mouse_pos.y())
-        
-        if self.mode.startswith("T_") and self.selected_index != -1: 
-            self.dragging = True
-        elif not self.mode.startswith("T_"): 
-            self.start_pos = mouse_pos
-            self.curr_mouse_pos = mouse_pos # Simpan titik awal preview
+        if self.mode.startswith("T_") and self.selected_index != -1: self.dragging = True
+        elif not self.mode.startswith("T_"): self.start_pos = mouse_pos
         self.redraw_canvas()
 
     def mouseMoveEvent(self, event):
@@ -252,10 +216,9 @@ class Canvas(QWidget):
             self.mirror_curr = curr_pos
             self.redraw_canvas()
             return
-            
-        # Logika Transformasi
         if self.dragging and self.selected_index != -1 and self.last_mouse_pos:
             dx, dy = curr_pos.x() - self.last_mouse_pos.x(), curr_pos.y() - self.last_mouse_pos.y()
+            # Hitung Pivot Pusat Objek
             obj = self.shapes[self.selected_index]
             if 'pts' in obj:
                 cx, cy = sum(p[0] for p in obj['pts']) / len(obj['pts']), sum(p[1] for p in obj['pts']) / len(obj['pts'])
@@ -271,15 +234,7 @@ class Canvas(QWidget):
                 d1, d2 = math.hypot(self.last_mouse_pos.x()-cx, self.last_mouse_pos.y()-cy), math.hypot(curr_pos.x()-cx, curr_pos.y()-cy)
                 if d1 > 0: s = d2/d1; mat = [[s, 0, 0], [0, s, 0], [0, 0, 1]]
             elif self.mode == "T_SHEAR": mat[0][1] = dx / 100.0
-            
-            self.apply_matrix_live(mat)
-            self.last_mouse_pos = curr_pos
-            self.redraw_canvas()
-            
-        # Logika Live Preview saat menggambar
-        elif not self.mode.startswith("T_") and hasattr(self, 'start_pos') and self.start_pos:
-            self.curr_mouse_pos = curr_pos
-            self.redraw_canvas()
+            self.apply_matrix_live(mat); self.last_mouse_pos = curr_pos; self.redraw_canvas()
 
     def mouseReleaseEvent(self, event):
         if self.mode == "T_MIRROR" and self.mirror_start:
@@ -298,18 +253,15 @@ class Canvas(QWidget):
             elif self.mode == "LINE": new_shape['pts'] = [(x1,y1), (x2,y2)]
             elif self.mode == "CIRCLE":
                 r = math.hypot(x2-x1, y2-y1)
-                new_shape['params'] = {'xc': x1, 'yc': y1, 'r': r}
+                new_shape['params'] = {'xc': x1, 'yc': y1, 'r': r} # Pusat di klik awal
             elif self.mode == "ELLIPSE":
-                xc, yc = (x1+x2)/2, (y1+y2)/2
+                xc, yc = (x1+x2)/2, (y1+y2)/2 # Pusat di tengah tarikan
                 new_shape['params'] = {'xc': xc, 'yc': yc, 'rx': abs(x2-x1)/2, 'ry': abs(y2-y1)/2}
 
             if 'pts' in new_shape or 'params' in new_shape:
                 self.shapes.append(new_shape)
                 self.selected_index = len(self.shapes) - 1
-                
-        self.dragging = False
-        self.start_pos = None
-        self.curr_mouse_pos = None # Reset preview
+        self.dragging, self.start_pos = False, None
         self.redraw_canvas()
 
     def paintEvent(self, event): QPainter(self).drawImage(0, 0, self.image)
@@ -317,7 +269,7 @@ class Canvas(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro Graphics Studio v3.0 - Live Preview & Transforms")
+        self.setWindowTitle("Pro Graphics Studio v3.0 - Manual Primitives Engine")
         self.canvas = Canvas()
         self.init_ui()
 
@@ -326,11 +278,13 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main Tools")
         self.addToolBar(toolbar)
 
+        # -- Section: Select --
         cursor_btn = QAction("Cursor (Select/Move)", self)
-        cursor_btn.triggered.connect(lambda: self.set_mode("CURSOR")) 
+        cursor_btn.triggered.connect(lambda: self.set_mode("CURSOR")) # Menggunakan T_MOVE secara internal
         toolbar.addAction(cursor_btn)
         toolbar.addSeparator()
 
+        # -- Section: Shapes --
         toolbar.addWidget(QLabel("  <b>SHAPES:</b>  "))
         for name, m in [("Line", "LINE"), ("Rect", "RECT"), ("Square", "SQUARE"), 
                         ("Triangle", "TRIANGLE"), ("Circle", "CIRCLE"), ("Ellipse", "ELLIPSE")]:
@@ -339,6 +293,7 @@ class MainWindow(QMainWindow):
             toolbar.addAction(a)
         toolbar.addSeparator()
 
+        # -- Section: Transformations --
         toolbar.addWidget(QLabel("  <b>TRANSFORMS:</b>  "))
         for name, m in [("Rotate", "T_ROTATE"), ("Scale", "T_SCALE"), 
                         ("Shear", "T_SHEAR"), ("Mirror Line", "T_MIRROR")]:
@@ -385,6 +340,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready. Canvas: White. Use English menu.")
 
     def set_mode(self, mode):
+        # Memetakan menu "Cursor" ke mode internal "T_MOVE" agar bisa drag
         internal_mode = "T_MOVE" if mode == "CURSOR" else mode
         self.canvas.mode = internal_mode
         self.statusBar().showMessage(f"Active Mode: {mode}")
