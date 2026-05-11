@@ -232,8 +232,17 @@ class Canvas(QWidget):
                 self.bresenham_line((x1,y1), (nx2,y1), prev_col); self.bresenham_line((nx2,y1), (nx2,ny2), prev_col)
                 self.bresenham_line((nx2,ny2), (x1,ny2), prev_col); self.bresenham_line((x1,ny2), (x1,y1), prev_col)
             elif self.mode == "TRIANGLE":
-                self.bresenham_line((x1,y1), (x1,y2), prev_col); self.bresenham_line((x1,y2), (x2,y2), prev_col)
-                self.bresenham_line((x2,y2), (x1,y1), prev_col)
+                s = abs(x2 - x1) # Lebar alas
+                h = s * math.sqrt(3) / 2 # Tinggi segitiga sama sisi
+                dy = 1 if y2 > y1 else -1 # Arah gambar (ke atas atau ke bawah)
+                
+                p1 = (int((x1 + x2) / 2), int(y1))
+                p2 = (int(x1), int(y1 + dy * h))
+                p3 = (int(x2), int(y1 + dy * h))
+                
+                self.bresenham_line(p1, p2, prev_col)
+                self.bresenham_line(p2, p3, prev_col)
+                self.bresenham_line(p3, p1, prev_col)
             elif self.mode == "CIRCLE":
                 r = math.hypot(x2-x1, y2-y1)
                 self.midpoint_circle(int(x1), int(y1), int(r), prev_col)
@@ -310,7 +319,16 @@ class Canvas(QWidget):
                 s = max(abs(x2-x1), abs(y2-y1))
                 nx2, ny2 = (x1+s if x2>x1 else x1-s), (y1+s if y2>y1 else y1-s)
                 new_shape['pts'] = [(x1,y1), (nx2,y1), (nx2,ny2), (x1,ny2)]
-            elif self.mode == "TRIANGLE": new_shape['pts'] = [(x1,y1), (x1,y2), (x2,y2)]
+            elif self.mode == "TRIANGLE": 
+                s = abs(x2 - x1)
+                h = s * math.sqrt(3) / 2
+                dy = 1 if y2 > y1 else -1
+                
+                p1 = (int((x1 + x2) / 2), int(y1))
+                p2 = (int(x1), int(y1 + dy * h))
+                p3 = (int(x2), int(y1 + dy * h))
+                
+                new_shape['pts'] = [p1, p2, p3]
             elif self.mode == "LINE": new_shape['pts'] = [(x1,y1), (x2,y2)]
             elif self.mode == "CIRCLE":
                 r = math.hypot(x2-x1, y2-y1)
