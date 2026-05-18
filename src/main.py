@@ -1,7 +1,8 @@
 import sys
 import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QLabel, QGroupBox, QToolBar)
+                             QHBoxLayout, QPushButton, QLabel, QGroupBox, QToolBar,
+                             QColorDialog) 
 from PyQt6.QtGui import QPainter, QImage, QColor, QAction
 from PyQt6.QtCore import Qt, QPoint
 
@@ -10,10 +11,10 @@ class Canvas(QWidget):
         super().__init__()
         self.setFixedSize(900, 600)
         self.image = QImage(900, 600, QImage.Format.Format_RGB32)
-        self.image.fill(Qt.GlobalColor.white) # WHITE CANVAS
+        self.image.fill(Qt.GlobalColor.white) 
         
-        self.mode = "CURSOR" # Default mode
-        self.color = QColor(0, 0, 0) # Default Black
+        self.mode = "CURSOR" 
+        self.color = QColor(0, 0, 0) 
         self.shapes = [] 
         self.selected_index = -1
         
@@ -21,17 +22,14 @@ class Canvas(QWidget):
         self.last_mouse_pos = None
         self.start_pos = None
         self.curr_mouse_pos = None
-        self.mirror_start = None
-        self.mirror_curr = None
 
         # --- SISTEM UNDO & REDO ---
         self.undo_stack = []
         self.redo_stack = []
-        self.save_state() # Simpan state kanvas kosong pertama kali
+        self.save_state() 
 
     # --- 1. STATE MANAGEMENT (UNDO / REDO) ---
     def _copy_shapes(self, source_shapes):
-        """Membuat duplikat memori (Deep Copy) agar state sebelumnya tidak ikut berubah"""
         cloned = []
         for s in source_shapes:
             new_s = {
@@ -45,9 +43,8 @@ class Canvas(QWidget):
         return cloned
 
     def save_state(self):
-        """Merekam kondisi kanvas saat ini ke dalam tumpukan Undo"""
         self.undo_stack.append(self._copy_shapes(self.shapes))
-        if len(self.undo_stack) > 30: # Batasi memori hingga 30 langkah
+        if len(self.undo_stack) > 30: 
             self.undo_stack.pop(0)
         self.redo_stack.clear()
 
@@ -153,7 +150,25 @@ class Canvas(QWidget):
                 if area < best_area: best_area, best_index = area, i
         return best_index
 
-    # --- 4. LIVE MATRIX TRANSFORMATIONS ---
+    # --- 4. INSTANT TRANSFORMS (FLIP & DELETE) ---
+    def flip_object(self, axis):
+        if self.selected_index == -1: return
+        mat = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        if axis == 'X': mat[0][0] = -1
+        elif axis == 'Y': mat[1][1] = -1
+        
+        self.apply_matrix_live(mat)
+        self.redraw_canvas()
+        self.save_state()
+
+    def delete_selected(self):
+        if self.selected_index != -1:
+            self.shapes.pop(self.selected_index)
+            self.selected_index = -1
+            self.redraw_canvas()
+            self.save_state()
+
+    # --- 5. LIVE MATRIX TRANSFORMATIONS ---
     def apply_matrix_live(self, matrix):
         if self.selected_index == -1: return
         obj = self.shapes[self.selected_index]
@@ -182,12 +197,7 @@ class Canvas(QWidget):
                 if 'r' in p: p['r'] *= scale
                 if 'rx' in p: p['rx'] *= scale; p['ry'] *= scale
 
-    def apply_arbitrary_reflection(self, p1, p2):
-        if self.selected_index == -1: return
-        # Logika mirror khusus bisa diimplementasikan secara spesifik nanti
-        pass
-
-    # --- 5. REDRAW ENGINE ---
+    # --- 6. REDRAW ENGINE ---
     def redraw_canvas(self):
         self.image.fill(Qt.GlobalColor.white)
         
@@ -216,7 +226,7 @@ class Canvas(QWidget):
                     self.flood_fill(cx, cy, target_color, obj['fill_color'])
 
         # --- LIVE PREVIEW (RUBBER-BANDING) ---
-        if not self.mode.startswith("T_") and self.start_pos and self.curr_mouse_pos:
+        if not self.mode.startswith("T_") and self.mode != "FILL" and self.start_pos and self.curr_mouse_pos:
             x1, y1 = self.start_pos.x(), self.start_pos.y()
             x2, y2 = self.curr_mouse_pos.x(), self.curr_mouse_pos.y()
             prev_col = self.color 
@@ -232,9 +242,9 @@ class Canvas(QWidget):
                 self.bresenham_line((x1,y1), (nx2,y1), prev_col); self.bresenham_line((nx2,y1), (nx2,ny2), prev_col)
                 self.bresenham_line((nx2,ny2), (x1,ny2), prev_col); self.bresenham_line((x1,ny2), (x1,y1), prev_col)
             elif self.mode == "TRIANGLE":
-                s = abs(x2 - x1) # Lebar alas
-                h = s * math.sqrt(3) / 2 # Tinggi segitiga sama sisi
-                dy = 1 if y2 > y1 else -1 # Arah gambar (ke atas atau ke bawah)
+                s = abs(x2 - x1)
+                h = s * math.sqrt(3) / 2
+                dy = 1 if y2 > y1 else -1
                 
                 p1 = (int((x1 + x2) / 2), int(y1))
                 p2 = (int(x1), int(y1 + dy * h))
@@ -250,33 +260,33 @@ class Canvas(QWidget):
                 xc, yc = (x1+x2)/2, (y1+y2)/2
                 rx, ry = abs(x2-x1)/2, abs(y2-y1)/2
                 self.midpoint_ellipse(int(xc), int(yc), int(rx), int(ry), prev_col)
-
-        if self.mode == "T_MIRROR" and self.mirror_start and self.mirror_curr:
-            self.bresenham_line((self.mirror_start.x(), self.mirror_start.y()), (self.mirror_curr.x(), self.mirror_curr.y()), Qt.GlobalColor.cyan)
         
         self.update()
 
-    # --- 6. MOUSE EVENTS ---
+    # --- 7. MOUSE EVENTS ---
     def mousePressEvent(self, event):
         mouse_pos = event.pos()
         self.last_mouse_pos = mouse_pos
-        if self.mode == "T_MIRROR": self.mirror_start = self.mirror_curr = mouse_pos
         self.selected_index = self.get_object_at(mouse_pos.x(), mouse_pos.y())
         
+        # Mode Interaktif FILL (Cat)
+        if self.mode == "FILL":
+            if self.selected_index != -1 and self.shapes[self.selected_index]['type'] != 'LINE':
+                self.shapes[self.selected_index]['fill_color'] = self.color
+                self.save_state()
+            self.redraw_canvas()
+            return
+
         if self.mode.startswith("T_") and self.selected_index != -1: 
             self.dragging = True
-        elif not self.mode.startswith("T_"): 
+        elif not self.mode.startswith("T_") and self.mode != "FILL": 
             self.start_pos = mouse_pos
             self.curr_mouse_pos = mouse_pos 
         self.redraw_canvas()
 
     def mouseMoveEvent(self, event):
         curr_pos = event.pos()
-        if self.mode == "T_MIRROR" and self.mirror_start:
-            self.mirror_curr = curr_pos
-            self.redraw_canvas()
-            return
-            
+        
         if self.dragging and self.selected_index != -1 and self.last_mouse_pos:
             dx, dy = curr_pos.x() - self.last_mouse_pos.x(), curr_pos.y() - self.last_mouse_pos.y()
             obj = self.shapes[self.selected_index]
@@ -299,19 +309,17 @@ class Canvas(QWidget):
             self.last_mouse_pos = curr_pos
             self.redraw_canvas()
             
-        elif not self.mode.startswith("T_") and hasattr(self, 'start_pos') and self.start_pos:
+        elif not self.mode.startswith("T_") and self.mode != "FILL" and hasattr(self, 'start_pos') and self.start_pos:
             self.curr_mouse_pos = curr_pos
             self.redraw_canvas()
 
     def mouseReleaseEvent(self, event):
         action_taken = False
         
-        if self.mode == "T_MIRROR" and self.mirror_start:
-            self.apply_arbitrary_reflection(self.mirror_start, event.pos())
-            self.mirror_start = self.mirror_curr = None
-            action_taken = True
-        elif not self.mode.startswith("T_") and hasattr(self, 'start_pos') and self.start_pos:
+        if not self.mode.startswith("T_") and self.mode != "FILL" and hasattr(self, 'start_pos') and self.start_pos:
             x1, y1, x2, y2 = self.start_pos.x(), self.start_pos.y(), event.pos().x(), event.pos().y()
+            
+            # Default Fill Color selalu 'None', user harus menekan Menu Fill
             new_shape = {'color': self.color, 'fill_color': None, 'type': self.mode}
             
             if self.mode == "RECT": new_shape['pts'] = [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]
@@ -342,14 +350,13 @@ class Canvas(QWidget):
                 self.selected_index = len(self.shapes) - 1
                 action_taken = True
         elif self.dragging:
-            action_taken = True # Transformasi selesai
+            action_taken = True 
                 
         self.dragging = False
         self.start_pos = None
         self.curr_mouse_pos = None
         self.redraw_canvas()
         
-        # Panggil save_state jika ada aksi menggambar / merubah yang selesai
         if action_taken:
             self.save_state()
 
@@ -367,56 +374,91 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main Tools")
         self.addToolBar(toolbar)
 
+        # Cursor and Delete group
         cursor_btn = QAction("Cursor (Select/Move)", self)
         cursor_btn.triggered.connect(lambda: self.set_mode("CURSOR")) 
         toolbar.addAction(cursor_btn)
+        
+        delete_btn = QAction("Delete", self)
+        delete_btn.triggered.connect(self.canvas.delete_selected)
+        toolbar.addAction(delete_btn)
+        
         toolbar.addSeparator()
 
-        toolbar.addWidget(QLabel("  <b>SHAPES:</b>  "))
+        # Shapes & Tools group
+        toolbar.addWidget(QLabel("  <b>SHAPES & TOOLS:</b>  "))
         for name, m in [("Line", "LINE"), ("Rect", "RECT"), ("Square", "SQUARE"), 
-                        ("Triangle", "TRIANGLE"), ("Circle", "CIRCLE"), ("Ellipse", "ELLIPSE")]:
+                        ("Triangle", "TRIANGLE"), ("Circle", "CIRCLE"), ("Ellipse", "ELLIPSE"),
+                        ("Fill Bucket", "FILL")]:
             a = QAction(name, self)
             a.triggered.connect(lambda ch, mode=m: self.set_mode(mode))
             toolbar.addAction(a)
         toolbar.addSeparator()
 
+        # Transforms group
         toolbar.addWidget(QLabel("  <b>TRANSFORMS:</b>  "))
-        for name, m in [("Rotate", "T_ROTATE"), ("Scale", "T_SCALE"), 
-                        ("Shear", "T_SHEAR"), ("Mirror Line", "T_MIRROR")]:
+        for name, m in [("Rotate", "T_ROTATE"), ("Scale", "T_SCALE"), ("Shear", "T_SHEAR")]:
             a = QAction(name, self)
             a.triggered.connect(lambda ch, mode=m: self.set_mode(mode))
             toolbar.addAction(a)
+            
+        toolbar.addSeparator()
+        
+        flip_x = QAction("Flip X", self)
+        flip_x.triggered.connect(lambda: self.canvas.flip_object('X'))
+        toolbar.addAction(flip_x)
+
+        flip_y = QAction("Flip Y", self)
+        flip_y.triggered.connect(lambda: self.canvas.flip_object('Y'))
+        toolbar.addAction(flip_y)
 
         # 2. SIDEBAR KIRI
         central_widget = QWidget()
         main_layout = QHBoxLayout(central_widget)
         sidebar = QVBoxLayout()
         
-        # --- Group Warna ---
-        color_group = QGroupBox("Select Color")
+        # --- Group Warna Global (Preset + Color Dialog) ---
+        color_group = QGroupBox("Colors")
         c_layout = QVBoxLayout()
-        colors = [("Black", Qt.GlobalColor.black), ("White", Qt.GlobalColor.white), 
-                  ("Red", Qt.GlobalColor.red), ("Green", Qt.GlobalColor.green), 
-                  ("Blue", Qt.GlobalColor.blue)]
-        for name, code in colors:
-            btn = QPushButton(name)
+        
+        # Preset Colors berbentuk kotak melingkar (HBoxLayout)
+        preset_layout = QHBoxLayout()
+        preset_colors = [
+            ("Red", Qt.GlobalColor.red), 
+            ("Blue", Qt.GlobalColor.blue), 
+            ("Green", Qt.GlobalColor.green), 
+            ("Black", Qt.GlobalColor.black), 
+            ("White", Qt.GlobalColor.white)
+        ]
+        
+        for name, code in preset_colors:
+            btn = QPushButton()
+            btn.setFixedSize(30, 30)
             hex_color = QColor(code).name()
-            txt_color = 'white' if name in ['Black', 'Blue', 'Red'] else 'black'
-            btn.setStyleSheet(f"background-color: {hex_color}; color: {txt_color}; font-weight: bold; border-radius: 4px; padding: 5px;")
-            btn.clicked.connect(lambda ch, c=code: self.set_color(c))
-            c_layout.addWidget(btn)
-        color_group.setLayout(c_layout)
+            # Style bulat layaknya palette warna
+            btn.setStyleSheet(f"background-color: {hex_color}; border: 1px solid gray; border-radius: 15px;")
+            btn.setToolTip(name)
+            btn.clicked.connect(lambda ch, c=code: self.set_preset_color(c))
+            preset_layout.addWidget(btn)
+            
+        c_layout.addLayout(preset_layout)
+        
+        # Color Chooser (QColorDialog)
+        self.btn_pick_color = QPushButton("Color Chooser")
+        self.btn_pick_color.setStyleSheet("background-color: black; color: white; font-weight: bold; padding: 10px; margin-top: 5px;")
+        self.btn_pick_color.clicked.connect(self.pick_color)
+        c_layout.addWidget(self.btn_pick_color)
+        
+        # Apply Actions
+        btn_apply_outline = QPushButton("Apply Outline to Selected") 
+        btn_apply_outline.clicked.connect(self.apply_global_outline)
+        c_layout.addWidget(btn_apply_outline)
 
-        # --- Group Aksi Warna ---
-        action_group = QGroupBox("Apply to Object")
-        a_layout = QVBoxLayout()
-        btn_outline = QPushButton("Apply Outline")
-        btn_outline.clicked.connect(self.apply_outline)
-        btn_fill = QPushButton("Apply Fill")
-        btn_fill.clicked.connect(self.apply_fill)
-        a_layout.addWidget(btn_outline)
-        a_layout.addWidget(btn_fill)
-        action_group.setLayout(a_layout)
+        btn_apply_fill = QPushButton("Apply Fill to Selected") 
+        btn_apply_fill.clicked.connect(self.apply_global_fill)
+        c_layout.addWidget(btn_apply_fill)
+        
+        color_group.setLayout(c_layout)
 
         # --- Group History (Undo/Redo) ---
         history_group = QGroupBox("History")
@@ -435,35 +477,52 @@ class MainWindow(QMainWindow):
 
         # Penempatan Sidebar
         sidebar.addWidget(color_group)
-        sidebar.addWidget(action_group)
         sidebar.addStretch()
-        sidebar.addWidget(history_group) # Ditaruh paling bawah
+        sidebar.addWidget(history_group) 
 
         main_layout.addLayout(sidebar)
         main_layout.addWidget(self.canvas)
         self.setCentralWidget(central_widget)
-        self.statusBar().showMessage("Ready. Canvas: White. Use English menu.")
+        self.statusBar().showMessage("Ready. Default color is Black. Use English menu.")
 
     def set_mode(self, mode):
         internal_mode = "T_MOVE" if mode == "CURSOR" else mode
         self.canvas.mode = internal_mode
         self.statusBar().showMessage(f"Active Mode: {mode}")
 
-    def set_color(self, code):
-        self.canvas.color = QColor(code)
-        self.statusBar().showMessage(f"Color Selected: {QColor(code).name()}")
+    def set_preset_color(self, code):
+        color = QColor(code)
+        self.canvas.color = color
+        brightness = (color.red() * 299 + color.green() * 587 + color.blue() * 114) / 1000
+        txt_color = 'black' if brightness > 128 else 'white'
+        self.btn_pick_color.setStyleSheet(f"background-color: {color.name()}; color: {txt_color}; font-weight: bold; padding: 10px; margin-top: 5px;")
+        self.statusBar().showMessage(f"Global Color set to: {color.name()}")
 
-    def apply_outline(self):
-        if self.canvas.selected_index != -1:
-            self.canvas.shapes[self.canvas.selected_index]['color'] = self.canvas.color
-            self.canvas.redraw_canvas()
-            self.canvas.save_state() # Simpan ke Undo saat warna diubah
+    def pick_color(self):
+        color = QColorDialog.getColor(self.canvas.color, self, "Pick Global Color")
+        if color.isValid():
+            self.canvas.color = color
+            brightness = (color.red() * 299 + color.green() * 587 + color.blue() * 114) / 1000
+            txt_color = 'black' if brightness > 128 else 'white'
+            self.btn_pick_color.setStyleSheet(f"background-color: {color.name()}; color: {txt_color}; font-weight: bold; padding: 10px; margin-top: 5px;")
+            self.statusBar().showMessage(f"Global Color set to: {color.name()}")
 
-    def apply_fill(self):
-        if self.canvas.selected_index != -1:
-            self.canvas.shapes[self.canvas.selected_index]['fill_color'] = self.canvas.color
+    def apply_global_outline(self):
+        idx = self.canvas.selected_index
+        if idx != -1:
+            self.canvas.shapes[idx]['color'] = self.canvas.color
             self.canvas.redraw_canvas()
-            self.canvas.save_state() # Simpan ke Undo saat warna di-fill
+            self.canvas.save_state() 
+            self.statusBar().showMessage("Outline color applied to selected object.")
+
+    def apply_global_fill(self):
+        idx = self.canvas.selected_index
+        if idx != -1:
+            if self.canvas.shapes[idx]['type'] != "LINE":
+                self.canvas.shapes[idx]['fill_color'] = self.canvas.color
+            self.canvas.redraw_canvas()
+            self.canvas.save_state() 
+            self.statusBar().showMessage("Fill color applied to selected object.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
