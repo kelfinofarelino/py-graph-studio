@@ -365,7 +365,7 @@ class Canvas(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KelDraw - Raster Graphics Editor")
+        self.setWindowTitle("ThetaDraw - Raster Graphics Editor")
         self.canvas = Canvas()
         self.init_ui()
 
